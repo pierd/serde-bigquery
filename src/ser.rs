@@ -1,25 +1,56 @@
 use std::iter::FromIterator;
+use std::io;
 
 use serde::{ser, Serialize};
 
 use crate::error::{Error, Result};
 
-pub struct Serializer {
-    output: String,
+#[derive(Default)]
+pub struct Serializer<W> {
+    writer: W,
 }
 
 pub fn to_string<T>(value: &T) -> Result<String>
 where
     T: ?Sized + Serialize,
 {
-    let mut serializer = Serializer {
-        output: String::new(),
-    };
-    value.serialize(&mut serializer)?;
-    Ok(serializer.output)
+    to_bytes(value).map(|v| String::from_utf8(v).unwrap())
 }
 
-impl<'a> ser::Serializer for &'a mut Serializer {
+pub fn to_bytes<T>(value: &T) -> Result<Vec<u8>>
+where
+    T: ?Sized + Serialize,
+{
+    let mut serializer = Serializer {
+        writer: Vec::new(),
+    };
+    value.serialize(&mut serializer)?;
+    Ok(serializer.writer)
+}
+
+
+impl<W> Serializer<W>
+where
+    W: io::Write,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<()> {
+        self.writer.write_all(buf).map_err(|err| err.into())
+    }
+
+    fn write_str(&mut self, s: &str) -> Result<()> {
+        self.write(s.as_bytes())
+    }
+
+    fn write_fmt(&mut self, fmt: std::fmt::Arguments<'_>) -> Result<()> {
+        self.writer.write_fmt(fmt).map_err(|err| err.into())
+    }
+}
+
+
+impl<'a, W> ser::Serializer for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -32,8 +63,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<()> {
-        self.output += if v { "true" } else { "false" };
-        Ok(())
+        self.write(if v { b"TRUE" } else { b"FALSE" })
     }
 
     fn serialize_i8(self, v: i8) -> Result<()> {
@@ -49,8 +79,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_i64(self, v: i64) -> Result<()> {
-        self.output += &v.to_string();
-        Ok(())
+        self.write_str(&v.to_string())
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
@@ -66,8 +95,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
-        self.output += &v.to_string();
-        Ok(())
+        self.write_str(&v.to_string())
     }
 
     fn serialize_f32(self, v: f32) -> Result<()> {
@@ -75,8 +103,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_f64(self, v: f64) -> Result<()> {
-        self.output += &v.to_string();
-        Ok(())
+        self.write_str(&v.to_string())
     }
 
     fn serialize_char(self, v: char) -> Result<()> {
@@ -85,26 +112,21 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     fn serialize_str(self, v: &str) -> Result<()> {
         // TODO: handle escape sequences
-        self.output += "\"";
-        self.output += v;
-        self.output += "\"";
-        Ok(())
+        self.write_fmt(format_args!("\"{}\"", v))
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
         // TODO: https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#string_and_bytes_literals
-        self.output += "b\"";
-        self.output.push_str(&String::from_iter(
+        self.write(b"b\"")?;
+        self.write_str(&String::from_iter(
             v.iter().map(|b| format!("\\x{:02x}", b)),
-        ));
-        self.output += "\"";
-        Ok(())
+        ))?;
+        self.write(b"\"")
     }
 
     // An absent optional is represented as the BigQuery `NULL`.
     fn serialize_none(self) -> Result<()> {
-        self.output += "NULL";
-        Ok(())
+        self.write(b"NULL")
     }
 
     fn serialize_some<T>(self, value: &T) -> Result<()>
@@ -152,14 +174,12 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        self.output += "[";
-        Ok(self)
+        self.write(b"[").map(|_| self)
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
         if len > 0 {
-            self.output += "STRUCT(";
-            Ok(self)
+            self.write(b"STRUCT(").map(|_| self)
         } else {
             Err(Error::EmptyStruct)
         }
@@ -185,8 +205,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     // Maps are represented in JSON as `{ K: V, K: V, ... }`.
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        self.output += "STRUCT(";
-        Ok(self)
+        self.write(b"STRUCT(").map(|_| self)
     }
 
     fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
@@ -206,7 +225,10 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 }
 
-impl<'a> ser::SerializeSeq for &'a mut Serializer {
+impl<'a, W> ser::SerializeSeq for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -214,19 +236,20 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('[') {
-            self.output += ",";
-        }
-        value.serialize(&mut **self)
+        value.serialize(&mut **self)?;
+        // FIXME: trailing comma
+        self.write(b",")
     }
 
     fn end(self) -> Result<()> {
-        self.output += "]";
-        Ok(())
+        self.write(b"]")
     }
 }
 
-impl<'a> ser::SerializeTuple for &'a mut Serializer {
+impl<'a, W> ser::SerializeTuple for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -234,23 +257,21 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('(') {
-            self.output += ",";
-        }
-        value.serialize(&mut **self)
+        value.serialize(&mut **self)?;
+        // FIXME: trailing comma
+        self.write(b",")
     }
 
     fn end(self) -> Result<()> {
-        if self.output.ends_with('(') {
-            Err(Error::EmptyStruct)
-        } else {
-            self.output += ")";
-            Ok(())
-        }
+        // TODO: emit Err(Error::EmptyStruct)
+        self.write(b")")
     }
 }
 
-impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
+impl<'a, W> ser::SerializeTupleStruct for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -258,23 +279,21 @@ impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('(') {
-            self.output += ",";
-        }
-        value.serialize(&mut **self)
+        value.serialize(&mut **self)?;
+        // FIXME: trailing comma
+        self.write(b",")
     }
 
     fn end(self) -> Result<()> {
-        if self.output.ends_with('(') {
-            Err(Error::EmptyStruct)
-        } else {
-            self.output += ")";
-            Ok(())
-        }
+        // TODO: emit Err(Error::EmptyStruct)
+        self.write(b")")
     }
 }
 
-impl<'a> ser::SerializeTupleVariant for &'a mut Serializer {
+impl<'a, W> ser::SerializeTupleVariant for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -298,7 +317,10 @@ impl<'a> ser::SerializeTupleVariant for &'a mut Serializer {
 // `serialize_entry` method allows serializers to optimize for the case where
 // key and value are both available simultaneously. In JSON it doesn't make a
 // difference so the default behavior for `serialize_entry` is fine.
-impl<'a> ser::SerializeMap for &'a mut Serializer {
+impl<'a, W> ser::SerializeMap for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -314,10 +336,11 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('{') {
-            self.output += ",";
-        }
-        key.serialize(&mut **self)
+        // TODO
+
+        key.serialize(&mut **self)?;
+        // FIXME: trailing comma
+        self.write(b",")
     }
 
     // It doesn't make a difference whether the colon is printed at the end of
@@ -327,23 +350,22 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        self.output += ":";
+        self.write(b":")?;
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        if self.output.ends_with('(') {
-            Err(Error::EmptyStruct)
-        } else {
-            self.output += ")";
-            Ok(())
-        }
+        // TODO: emit Err(Error::EmptyStruct)
+        self.write(b")")
     }
 }
 
 // Structs are like maps in which the keys are constrained to be compile-time
 // constant strings.
-impl<'a> ser::SerializeStruct for &'a mut Serializer {
+impl<'a, W> ser::SerializeStruct for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 
@@ -351,27 +373,24 @@ impl<'a> ser::SerializeStruct for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('(') {
-            self.output += ",";
-        }
         value.serialize(&mut **self)?;
-        self.output += " AS `";
-        self.output += key;
-        self.output += "`";
-        Ok(())
+        // https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#identifiers
+        // FIXME: handle ` in key
+        // FIXME: handle empty key
+        // FIXME: trailing comma
+        self.write_fmt(format_args!(" AS `{}`,", key))
     }
 
     fn end(self) -> Result<()> {
-        if self.output.ends_with('(') {
-            Err(Error::EmptyStruct)
-        } else {
-            self.output += ")";
-            Ok(())
-        }
+        // TODO: emit Err(Error::EmptyStruct)
+        self.write(b")")
     }
 }
 
-impl<'a> ser::SerializeStructVariant for &'a mut Serializer {
+impl<'a, W> ser::SerializeStructVariant for &'a mut Serializer<W>
+where
+    W: io::Write,
+{
     type Ok = ();
     type Error = Error;
 

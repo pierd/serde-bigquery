@@ -4,9 +4,10 @@ use serde::ser;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Error {
     Message(String),
+    IOError(std::io::Error),
     UnsupportedType,
     EmptyStruct,
 }
@@ -19,12 +20,19 @@ impl ser::Error for Error {
 
 impl Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str(match self {
-            Error::Message(msg) => msg,
-            Error::UnsupportedType => "unsupported type",
-            Error::EmptyStruct => "empty struct",
-        })
+        match self {
+            Error::Message(msg) => formatter.write_str(msg),
+            Error::IOError(err) => formatter.write_fmt(format_args!("I/O error: {}", err)),
+            Error::UnsupportedType => formatter.write_str("unsupported type"),
+            Error::EmptyStruct => formatter.write_str("empty struct"),
+        }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IOError(err)
+    }
+}

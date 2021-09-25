@@ -1,0 +1,15 @@
+[package]
+name = "serde_bigquery"
+version = "0.1.0"
+edition = "2018"
+license = "MIT"
+authors = ["Kuba Jaroszewski <jakub.jaroszewski@gmail.com>"]
+keywords = ["serde", "bigquery"]
+categories = ["encoding"]
+
+[dependencies]
+serde = "1.0.130"
+
+[dev-dependencies]
+serde_derive = "1.0.130"
+serde_bytes = "0.11.5"

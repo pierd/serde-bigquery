@@ -1,0 +1,13 @@
+[package]
+name = "json2bigquery"
+version = "0.1.0"
+edition = "2018"
+license = "MIT"
+authors = ["Kuba Jaroszewski <jakub.jaroszewski@gmail.com>"]
+keywords = ["json", "bigquery"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+serde_json = "1.0.68"
+serde-transcode = "1.1.1"
+serde_bigquery = { version = "0.1.0", path = "../serde_bigquery" }

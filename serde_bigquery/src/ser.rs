@@ -33,6 +33,10 @@ impl<W> Serializer<W>
 where
     W: io::Write,
 {
+    pub fn new(writer: W) -> Self {
+        Self { writer }
+    }
+
     fn write(&mut self, buf: &[u8]) -> Result<()> {
         self.writer.write_all(buf).map_err(|err| err.into())
     }

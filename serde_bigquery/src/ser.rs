@@ -5,7 +5,9 @@ use serde::{ser, Serialize};
 
 use crate::error::{Error, Result};
 
-#[derive(Default)]
+// TODO: check types - all structs in an array has to have the same files
+// TODO: ensure struct/map fields are serialized in the same order (BigQuery doesn't care about field name annotations after the first struct)
+
 pub struct Serializer<W> {
     writer: W,
 }
@@ -115,12 +117,13 @@ where
     }
 
     fn serialize_str(self, v: &str) -> Result<()> {
-        // TODO: handle escape sequences
+        // TODO: handle escape sequences (")
         self.write_fmt(format_args!("\"{}\"", v))
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
-        // TODO: https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#string_and_bytes_literals
+        // https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#string_and_bytes_literals
+        // TODO: (nice to have) use printable characters directly where possible
         self.write(b"b\"")?;
         self.write_str(&String::from_iter(
             v.iter().map(|b| format!("\\x{:02x}", b)),
@@ -128,7 +131,6 @@ where
         self.write(b"\"")
     }
 
-    // An absent optional is represented as the BigQuery `NULL`.
     fn serialize_none(self) -> Result<()> {
         self.write(b"NULL")
     }
@@ -207,7 +209,6 @@ where
         Err(Error::UnsupportedType)
     }
 
-    // Maps are represented in JSON as `{ K: V, K: V, ... }`.
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
         self.write(b"STRUCT(").map(|_| self)
     }
@@ -216,8 +217,6 @@ where
         self.serialize_map(Some(len))
     }
 
-    // Struct variants are represented in JSON as `{ NAME: { K: V, ... } }`.
-    // This is the externally tagged representation.
     fn serialize_struct_variant(
         self,
         _name: &'static str,
@@ -313,14 +312,6 @@ where
     }
 }
 
-// Some `Serialize` types are not able to hold a key and value in memory at the
-// same time so `SerializeMap` implementations are required to support
-// `serialize_key` and `serialize_value` individually.
-//
-// There is a third optional method on the `SerializeMap` trait. The
-// `serialize_entry` method allows serializers to optimize for the case where
-// key and value are both available simultaneously. In JSON it doesn't make a
-// difference so the default behavior for `serialize_entry` is fine.
 impl<'a, W> ser::SerializeMap for &'a mut Serializer<W>
 where
     W: io::Write,
@@ -328,19 +319,11 @@ where
     type Ok = ();
     type Error = Error;
 
-    // The Serde data model allows map keys to be any serializable type. JSON
-    // only allows string keys so the implementation below will produce invalid
-    // JSON if the key serializes as something other than a string.
-    //
-    // A real JSON serializer would need to validate that map keys are strings.
-    // This can be done by using a different Serializer to serialize the key
-    // (instead of `&mut **self`) and having that other serializer only
-    // implement `serialize_str` and return an error on any other data type.
     fn serialize_key<T>(&mut self, key: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        // TODO
+        // TODO: this isn't actually implemented
 
         key.serialize(&mut **self)?;
         // FIXME: trailing comma
@@ -358,14 +341,14 @@ where
         value.serialize(&mut **self)
     }
 
+    // TODO: (nice to have) implement serialize_entry
+
     fn end(self) -> Result<()> {
         // TODO: emit Err(Error::EmptyStruct)
         self.write(b")")
     }
 }
 
-// Structs are like maps in which the keys are constrained to be compile-time
-// constant strings.
 impl<'a, W> ser::SerializeStruct for &'a mut Serializer<W>
 where
     W: io::Write,
@@ -419,8 +402,11 @@ mod test {
     use serde_derive::Serialize;
 
     #[test]
-    fn test_simple_nums() {
-        assert_eq!(to_string(&1).unwrap(), "1");
+    fn test_simple_vals() {
+        assert_eq!(to_string(&false).unwrap(), "FALSE");
+        assert_eq!(to_string(&true).unwrap(), "TRUE");
+        assert_eq!(to_string(&42).unwrap(), "42");
+        assert_eq!(to_string(&1.25).unwrap(), "1.25");
     }
 
     #[test]
@@ -436,7 +422,7 @@ mod test {
     #[test]
     fn test_optional_none() {
         let x: Option<u32> = None;
-        assert_eq!(to_string(&x).unwrap(), r#"NULL"#);
+        assert_eq!(to_string(&x).unwrap(), "NULL");
     }
 
     #[test]

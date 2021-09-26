@@ -50,6 +50,13 @@ where
     fn write_fmt(&mut self, fmt: std::fmt::Arguments<'_>) -> Result<()> {
         self.writer.write_fmt(fmt).map_err(|err| err.into())
     }
+
+    fn serialize<T>(&mut self, value: &T) -> Result<()>
+    where
+        T: ?Sized + Serialize,
+    {
+        value.serialize(self)
+    }
 }
 
 
@@ -60,12 +67,12 @@ where
     type Ok = ();
     type Error = Error;
 
-    type SerializeSeq = Self;
-    type SerializeTuple = Self;
-    type SerializeTupleStruct = Self;
+    type SerializeSeq = SeqSerializer<'a, W>;
+    type SerializeTuple = StructSerializer<'a, W>;
+    type SerializeTupleStruct = StructSerializer<'a, W>;
     type SerializeTupleVariant = Self;
     type SerializeMap = Self;
-    type SerializeStruct = Self;
+    type SerializeStruct = StructSerializer<'a, W>;
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<()> {
@@ -180,12 +187,12 @@ where
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        self.write(b"[").map(|_| self)
+        self.write(b"[").map(move |_| SeqSerializer::with_serializer(self))
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
         if len > 0 {
-            self.write(b"STRUCT(").map(|_| self)
+            self.write(b"STRUCT(").map(move |_| StructSerializer::with_serializer(self))
         } else {
             Err(Error::EmptyStruct)
         }
@@ -214,7 +221,7 @@ where
     }
 
     fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
-        self.serialize_map(Some(len))
+        self.serialize_tuple(len)
     }
 
     fn serialize_struct_variant(
@@ -228,7 +235,18 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeSeq for &'a mut Serializer<W>
+pub struct SeqSerializer<'a, W> {
+    serializer: &'a mut Serializer<W>,
+    has_elements: bool,
+}
+
+impl<'a, W> SeqSerializer<'a, W> {
+    fn with_serializer(serializer: &'a mut Serializer<W>) -> Self {
+        Self { serializer, has_elements: false }
+    }
+}
+
+impl<'a, W> ser::SerializeSeq for SeqSerializer<'a, W>
 where
     W: io::Write,
 {
@@ -239,17 +257,65 @@ where
     where
         T: ?Sized + Serialize,
     {
-        value.serialize(&mut **self)?;
-        // FIXME: trailing comma
-        self.write(b",")
+        if self.has_elements {
+            self.serializer.write(b",")?;
+        } else {
+            self.has_elements = true;
+        }
+        self.serializer.serialize(value)
     }
 
     fn end(self) -> Result<()> {
-        self.write(b"]")
+        self.serializer.write(b"]")
     }
 }
 
-impl<'a, W> ser::SerializeTuple for &'a mut Serializer<W>
+pub struct StructSerializer<'a, W> {
+    serializer: &'a mut Serializer<W>,
+    has_elements: bool,
+}
+
+impl<'a, W> StructSerializer<'a, W> {
+    fn with_serializer(serializer: &'a mut Serializer<W>) -> Self {
+        Self { serializer, has_elements: false }
+    }
+}
+
+impl<'a, W> StructSerializer<'a, W>
+where
+    W: io::Write,
+{
+    fn serialize_field<T>(&mut self, key: Option<&'static str>, value: &T) -> Result<()>
+    where
+        T: ?Sized + Serialize,
+    {
+        if self.has_elements {
+            self.serializer.write(b",")?;
+        } else {
+            self.has_elements = true;
+        }
+        self.serializer.serialize(value)?;
+
+        if let Some(key) = key {
+            // https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#identifiers
+            // FIXME: handle ` in key
+            // FIXME: handle empty key
+            self.serializer.write_fmt(format_args!(" AS `{}`", key))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn serialize_struct_end(self) -> Result<()> {
+        if !self.has_elements {
+            Err(Error::EmptyStruct)
+        } else {
+            self.serializer.write(b")")
+        }
+    }
+}
+
+impl<'a, W> ser::SerializeTuple for StructSerializer<'a, W>
 where
     W: io::Write,
 {
@@ -260,18 +326,15 @@ where
     where
         T: ?Sized + Serialize,
     {
-        value.serialize(&mut **self)?;
-        // FIXME: trailing comma
-        self.write(b",")
+        self.serialize_field(None, value)
     }
 
     fn end(self) -> Result<()> {
-        // TODO: emit Err(Error::EmptyStruct)
-        self.write(b")")
+        self.serialize_struct_end()
     }
 }
 
-impl<'a, W> ser::SerializeTupleStruct for &'a mut Serializer<W>
+impl<'a, W> ser::SerializeTupleStruct for StructSerializer<'a, W>
 where
     W: io::Write,
 {
@@ -282,14 +345,11 @@ where
     where
         T: ?Sized + Serialize,
     {
-        value.serialize(&mut **self)?;
-        // FIXME: trailing comma
-        self.write(b",")
+        self.serialize_field(None, value)
     }
 
     fn end(self) -> Result<()> {
-        // TODO: emit Err(Error::EmptyStruct)
-        self.write(b")")
+        self.serialize_struct_end()
     }
 }
 
@@ -349,7 +409,7 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeStruct for &'a mut Serializer<W>
+impl<'a, W> ser::SerializeStruct for StructSerializer<'a, W>
 where
     W: io::Write,
 {
@@ -360,17 +420,11 @@ where
     where
         T: ?Sized + Serialize,
     {
-        value.serialize(&mut **self)?;
-        // https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#identifiers
-        // FIXME: handle ` in key
-        // FIXME: handle empty key
-        // FIXME: trailing comma
-        self.write_fmt(format_args!(" AS `{}`,", key))
+        self.serialize_field(Some(key), value)
     }
 
     fn end(self) -> Result<()> {
-        // TODO: emit Err(Error::EmptyStruct)
-        self.write(b")")
+        self.serialize_struct_end()
     }
 }
 

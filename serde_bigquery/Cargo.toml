@@ -6,6 +6,7 @@ license = "MIT"
 authors = ["Kuba Jaroszewski <jakub.jaroszewski@gmail.com>"]
 keywords = ["serde", "bigquery"]
 categories = ["encoding"]
+description = "A serde Serializer into BigQuery literal format."
 
 [dependencies]
 serde = "1.0.130"

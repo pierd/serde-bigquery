@@ -4,14 +4,13 @@ use std::iter::FromIterator;
 use serde::{ser, Serialize};
 
 use crate::error::{Error, Result};
-use crate::ser::identifier::{format_as_identifier, to_identifier};
+use crate::ser::struct_serializer::StructSerializer;
+use crate::ser::typed_serializer::TypedSerializer;
 use crate::ser::unsupported::UnsupportedSerializer;
-use crate::types::{self, Field};
-
-// TODO: ensure struct/map fields are serialized in the same order (BigQuery doesn't care about field name annotations after the first struct)
+use crate::types::Type;
 
 pub struct Serializer<W> {
-    writer: W,
+    pub(crate) writer: W,
 }
 
 /// Serialize value to String
@@ -37,19 +36,19 @@ impl<W: io::Write> Serializer<W> {
         Self { writer }
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<()> {
-        self.writer.write_all(buf).map_err(|err| err.into())
+    pub(crate) fn write(&mut self, buf: &[u8]) -> Result<()> {
+        self.writer.write_all(buf).map_err(Error::io)
     }
 
-    fn write_str(&mut self, s: &str) -> Result<()> {
+    pub(crate) fn write_str(&mut self, s: &str) -> Result<()> {
         self.write(s.as_bytes())
     }
 
-    fn write_fmt(&mut self, fmt: std::fmt::Arguments<'_>) -> Result<()> {
-        self.writer.write_fmt(fmt).map_err(|err| err.into())
+    pub(crate) fn write_fmt(&mut self, fmt: std::fmt::Arguments<'_>) -> Result<()> {
+        self.writer.write_fmt(fmt).map_err(Error::io)
     }
 
-    fn serialize<T>(&mut self, value: &T) -> Result<types::Type>
+    pub(crate) fn serialize<T>(&mut self, value: &T) -> Result<Type>
     where
         T: ?Sized + Serialize,
     {
@@ -58,7 +57,7 @@ impl<W: io::Write> Serializer<W> {
 }
 
 impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
-    type Ok = types::Type;
+    type Ok = Type;
     type Error = Error;
 
     type SerializeSeq = SeqSerializer<'a, W>;
@@ -69,87 +68,87 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     type SerializeStruct = StructSerializer<'a, W>;
     type SerializeStructVariant = UnsupportedSerializer;
 
-    fn serialize_bool(self, v: bool) -> Result<types::Type> {
+    fn serialize_bool(self, v: bool) -> Result<Type> {
         self.write(if v { b"TRUE" } else { b"FALSE" })
-            .map(|_| types::Type::Bool)
+            .map(|_| Type::Bool)
     }
 
-    fn serialize_i8(self, v: i8) -> Result<types::Type> {
+    fn serialize_i8(self, v: i8) -> Result<Type> {
         self.serialize_i64(i64::from(v))
     }
 
-    fn serialize_i16(self, v: i16) -> Result<types::Type> {
+    fn serialize_i16(self, v: i16) -> Result<Type> {
         self.serialize_i64(i64::from(v))
     }
 
-    fn serialize_i32(self, v: i32) -> Result<types::Type> {
+    fn serialize_i32(self, v: i32) -> Result<Type> {
         self.serialize_i64(i64::from(v))
     }
 
-    fn serialize_i64(self, v: i64) -> Result<types::Type> {
-        self.write_str(&v.to_string()).map(|_| types::Type::Number)
+    fn serialize_i64(self, v: i64) -> Result<Type> {
+        self.write_str(&v.to_string()).map(|_| Type::Number)
     }
 
-    fn serialize_u8(self, v: u8) -> Result<types::Type> {
+    fn serialize_u8(self, v: u8) -> Result<Type> {
         self.serialize_u64(u64::from(v))
     }
 
-    fn serialize_u16(self, v: u16) -> Result<types::Type> {
+    fn serialize_u16(self, v: u16) -> Result<Type> {
         self.serialize_u64(u64::from(v))
     }
 
-    fn serialize_u32(self, v: u32) -> Result<types::Type> {
+    fn serialize_u32(self, v: u32) -> Result<Type> {
         self.serialize_u64(u64::from(v))
     }
 
-    fn serialize_u64(self, v: u64) -> Result<types::Type> {
-        self.write_str(&v.to_string()).map(|_| types::Type::Number)
+    fn serialize_u64(self, v: u64) -> Result<Type> {
+        self.write_str(&v.to_string()).map(|_| Type::Number)
     }
 
-    fn serialize_f32(self, v: f32) -> Result<types::Type> {
+    fn serialize_f32(self, v: f32) -> Result<Type> {
         self.serialize_f64(f64::from(v))
     }
 
-    fn serialize_f64(self, v: f64) -> Result<types::Type> {
-        self.write_str(&v.to_string()).map(|_| types::Type::Number)
+    fn serialize_f64(self, v: f64) -> Result<Type> {
+        self.write_str(&v.to_string()).map(|_| Type::Number)
     }
 
-    fn serialize_char(self, v: char) -> Result<types::Type> {
+    fn serialize_char(self, v: char) -> Result<Type> {
         self.serialize_str(&v.to_string())
     }
 
-    fn serialize_str(self, v: &str) -> Result<types::Type> {
+    fn serialize_str(self, v: &str) -> Result<Type> {
         // TODO: handle escape sequences (")
         self.write_fmt(format_args!("\"{}\"", v))
-            .map(|_| types::Type::String)
+            .map(|_| Type::String)
     }
 
-    fn serialize_bytes(self, v: &[u8]) -> Result<types::Type> {
+    fn serialize_bytes(self, v: &[u8]) -> Result<Type> {
         // https://cloud.google.com/bigquery/docs/reference/standard-sql/lexical#string_and_bytes_literals
         // TODO: (nice to have) use printable characters directly where possible
         self.write(b"b\"")?;
         self.write_str(&String::from_iter(
             v.iter().map(|b| format!("\\x{:02x}", b)),
         ))?;
-        self.write(b"\"").map(|_| types::Type::Bytes)
+        self.write(b"\"").map(|_| Type::Bytes)
     }
 
-    fn serialize_none(self) -> Result<types::Type> {
-        self.write(b"NULL").map(|_| types::Type::Any)
+    fn serialize_none(self) -> Result<Type> {
+        self.write(b"NULL").map(|_| Type::Any)
     }
 
-    fn serialize_some<T>(self, value: &T) -> Result<types::Type>
+    fn serialize_some<T>(self, value: &T) -> Result<Type>
     where
         T: ?Sized + Serialize,
     {
         value.serialize(self)
     }
 
-    fn serialize_unit(self) -> Result<types::Type> {
+    fn serialize_unit(self) -> Result<Type> {
         self.serialize_none()
     }
 
-    fn serialize_unit_struct(self, _name: &'static str) -> Result<types::Type> {
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Type> {
         self.serialize_unit()
     }
 
@@ -158,11 +157,11 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-    ) -> Result<types::Type> {
+    ) -> Result<Type> {
         self.serialize_str(variant)
     }
 
-    fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<types::Type>
+    fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<Type>
     where
         T: ?Sized + Serialize,
     {
@@ -175,7 +174,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         _variant_index: u32,
         _variant: &'static str,
         _value: &T,
-    ) -> Result<types::Type>
+    ) -> Result<Type>
     where
         T: ?Sized + Serialize,
     {
@@ -237,7 +236,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 pub struct SeqSerializer<'a, W> {
     serializer: &'a mut Serializer<W>,
     has_elements: bool,
-    element_type: types::Type,
+    element_type: Type,
 }
 
 impl<'a, W> SeqSerializer<'a, W> {
@@ -245,13 +244,20 @@ impl<'a, W> SeqSerializer<'a, W> {
         Self {
             serializer,
             has_elements: false,
-            element_type: types::Type::Any,
+            element_type: Type::Any,
+        }
+    }
+
+    pub(crate) fn with_element_type(self, element_type: Type) -> Self {
+        Self {
+            element_type,
+            ..self
         }
     }
 }
 
 impl<'a, W: io::Write> ser::SerializeSeq for SeqSerializer<'a, W> {
-    type Ok = types::Type;
+    type Ok = Type;
     type Error = Error;
 
     fn serialize_element<T>(&mut self, value: &T) -> Result<()>
@@ -263,158 +269,25 @@ impl<'a, W: io::Write> ser::SerializeSeq for SeqSerializer<'a, W> {
         } else {
             self.has_elements = true;
         }
-        let element_type = self.serializer.serialize(value)?;
+        let mut typed_serializer =
+            TypedSerializer::with_serializer(self.serializer, &self.element_type);
+        let element_type = value.serialize(&mut typed_serializer)?;
         let new_element_type = self.element_type.merge(&element_type);
         if let Some(merged_element_type) = new_element_type {
             self.element_type = merged_element_type;
             Ok(())
         } else {
-            Err(Error::UnexpectedType(
-                self.element_type.clone(),
-                element_type,
-            ))
+            Err(Error::UnexpectedType {
+                expected: self.element_type.clone(),
+                found: element_type,
+            })
         }
     }
 
-    fn end(self) -> Result<types::Type> {
+    fn end(self) -> Result<Type> {
         self.serializer
             .write(b"]")
-            .map(|_| types::Type::Array(Box::new(self.element_type)))
-    }
-}
-
-pub struct StructSerializer<'a, W> {
-    serializer: &'a mut Serializer<W>,
-    fields: Vec<Field>,
-    pending_key: Option<String>,
-}
-
-impl<'a, W> StructSerializer<'a, W> {
-    fn with_serializer(serializer: &'a mut Serializer<W>) -> Self {
-        Self {
-            serializer,
-            fields: Vec::new(),
-            pending_key: None,
-        }
-    }
-}
-
-impl<'a, W: io::Write> StructSerializer<'a, W> {
-    fn serialize_field<T>(&mut self, key: Option<&str>, value: &T) -> Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        if !self.fields.is_empty() {
-            self.serializer.write(b",")?;
-        }
-        let field_type = self.serializer.serialize(value)?;
-
-        if let Some(key) = key {
-            if !key.is_empty() {
-                self.serializer
-                    .write_fmt(format_args!(" AS {}", format_as_identifier(key)))?;
-            }
-        }
-
-        self.fields.push(Field::with_type_and_name(
-            field_type,
-            key.map(|name| name.to_string()),
-        ));
-
-        Ok(())
-    }
-
-    fn serialize_struct_end(self) -> Result<types::Type> {
-        if self.fields.is_empty() {
-            Err(Error::EmptyStruct)
-        } else {
-            self.serializer
-                .write(b")")
-                .map(|_| types::Type::Struct(self.fields))
-        }
-    }
-}
-
-impl<'a, W: io::Write> ser::SerializeTuple for StructSerializer<'a, W> {
-    type Ok = types::Type;
-    type Error = Error;
-
-    fn serialize_element<T>(&mut self, value: &T) -> Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        self.serialize_field(None, value)
-    }
-
-    fn end(self) -> Result<Self::Ok> {
-        self.serialize_struct_end()
-    }
-}
-
-impl<'a, W: io::Write> ser::SerializeTupleStruct for StructSerializer<'a, W> {
-    type Ok = types::Type;
-    type Error = Error;
-
-    fn serialize_field<T>(&mut self, value: &T) -> Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        self.serialize_field(None, value)
-    }
-
-    fn end(self) -> Result<Self::Ok> {
-        self.serialize_struct_end()
-    }
-}
-
-impl<'a, W: io::Write> ser::SerializeMap for StructSerializer<'a, W> {
-    type Ok = types::Type;
-    type Error = Error;
-
-    fn serialize_key<T>(&mut self, key: &T) -> Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        assert!(self.pending_key.is_none());
-        self.pending_key = Some(to_identifier(key)?);
-        Ok(())
-    }
-
-    fn serialize_value<T>(&mut self, value: &T) -> Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        let mut key = None;
-        std::mem::swap(&mut key, &mut self.pending_key);
-        self.serialize_field(key.as_deref(), value)
-    }
-
-    fn serialize_entry<K: ?Sized, V: ?Sized>(&mut self, key: &K, value: &V) -> Result<()>
-    where
-        K: Serialize,
-        V: Serialize,
-    {
-        self.serialize_field(Some(&to_identifier(key)?), value)
-    }
-
-    fn end(self) -> Result<Self::Ok> {
-        self.serialize_struct_end()
-    }
-}
-
-impl<'a, W: io::Write> ser::SerializeStruct for StructSerializer<'a, W> {
-    type Ok = types::Type;
-    type Error = Error;
-
-    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        self.serialize_field(Some(key), value)
-    }
-
-    fn end(self) -> Result<Self::Ok> {
-        self.serialize_struct_end()
+            .map(|_| Type::Array(Box::new(self.element_type)))
     }
 }
 

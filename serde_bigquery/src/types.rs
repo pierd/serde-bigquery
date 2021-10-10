@@ -1,11 +1,12 @@
 use std::fmt::Write;
 
+use crate::error::{Error, Result};
 use crate::ser::identifier::format_as_identifier;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Field {
-    field_type: Type,
-    field_name: Option<String>,
+    pub field_type: Type,
+    pub field_name: Option<String>,
 }
 
 impl Field {
@@ -14,6 +15,10 @@ impl Field {
             field_type,
             field_name,
         }
+    }
+
+    pub fn with_name(field_name: Option<String>) -> Self {
+        Self::with_type_and_name(Type::Any, field_name)
     }
 
     fn merge(&self, other: &Self) -> Option<Self> {
@@ -39,7 +44,7 @@ impl std::fmt::Display for Field {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Type {
     Any,
     Bool,
@@ -51,6 +56,10 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn any_array() -> Self {
+        Self::Array(Box::new(Self::Any))
+    }
+
     pub fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -121,6 +130,28 @@ impl std::fmt::Display for Type {
                 f.write_str(">")
             }
             Type::Array(t) => write!(f, "ARRAY<{}>", t),
+        }
+    }
+}
+
+pub trait CheckType {
+    fn check_type(self, expected: &Type) -> Result<Type>;
+}
+
+impl CheckType for Result<Type> {
+    fn check_type(self, expected: &Type) -> Result<Type> {
+        match self {
+            Ok(ref found) => {
+                if expected.matches(found) {
+                    self
+                } else {
+                    Err(Error::UnexpectedType {
+                        expected: expected.clone(),
+                        found: found.clone(),
+                    })
+                }
+            }
+            _ => self,
         }
     }
 }

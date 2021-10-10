@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 
 use serde::ser;
 
-use crate::types::Type;
+use crate::types::{Field, Type};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -14,7 +14,19 @@ pub enum Error {
     UnsupportedType,
     EmptyStruct,
     InvalidIdentifierType(Type),
-    UnexpectedType(Type, Type),
+    UnexpectedType { expected: Type, found: Type },
+    UnexpectedStructField(Field),
+    DuplicateStructField(String),
+}
+
+impl Error {
+    pub fn io(err: std::io::Error) -> Self {
+        Self::IOError(err)
+    }
+
+    pub fn fmt(err: std::fmt::Error) -> Self {
+        Self::FormattingError(err)
+    }
 }
 
 impl ser::Error for Error {
@@ -36,10 +48,16 @@ impl Display for Error {
             Error::InvalidIdentifierType(t) => {
                 formatter.write_fmt(format_args!("invalid identifier type: {}", t))
             }
-            Error::UnexpectedType(expected, found) => formatter.write_fmt(format_args!(
+            Error::UnexpectedType { expected, found } => formatter.write_fmt(format_args!(
                 "unexpected type: {} expected: {}",
                 found, expected
             )),
+            Error::UnexpectedStructField(field) => {
+                formatter.write_fmt(format_args!("unexpected struct field: {}", field))
+            }
+            Error::DuplicateStructField(name) => {
+                formatter.write_fmt(format_args!("duplicate struct field: {}", name))
+            }
         }
     }
 }
@@ -48,12 +66,12 @@ impl std::error::Error for Error {}
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        Error::IOError(err)
+        Self::io(err)
     }
 }
 
 impl From<std::fmt::Error> for Error {
     fn from(err: std::fmt::Error) -> Self {
-        Error::FormattingError(err)
+        Self::fmt(err)
     }
 }

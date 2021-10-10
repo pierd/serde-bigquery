@@ -39,7 +39,6 @@ mod test {
     }
 
     #[test]
-    #[ignore] // FIXME
     fn test_fields_out_of_order() {
         assert_eq!(
             to_bigquery("[{\"a\": false, \"b\": 1}, {\"b\": 2, \"a\": true}]"),
@@ -48,7 +47,6 @@ mod test {
     }
 
     #[test]
-    #[ignore] // FIXME
     fn test_missing_fields() {
         assert_eq!(
             to_bigquery("[{\"a\": false, \"b\": 1}, {\"a\": true}]"),

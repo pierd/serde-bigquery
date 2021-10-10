@@ -146,7 +146,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     fn serialize_unit(self) -> Result<types::Type> {
-        self.serialize_bool(true)
+        self.serialize_none()
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<types::Type> {
